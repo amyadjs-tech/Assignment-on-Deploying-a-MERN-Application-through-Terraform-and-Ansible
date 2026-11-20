@@ -1,0 +1,29 @@
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+
+# Terraform variables containing local configuration
+terraform/terraform.tfvars
+terraform/*.auto.tfvars
+
+# Ansible inventory and secrets
+ansible/secrets.yml
+ansible/inventory.ini
+
+# SSH keys
+*.pem
+*.key
+id_rsa
+id_ed25519
+travelmemory_key
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/

@@ -1,0 +1,108 @@
+---
+- name: Configure MongoDB server
+  hosts: database
+  become: true
+
+  vars_files:
+    - secrets.yml
+
+  vars:
+    mongo_version: "8.0"
+    mongo_app_db: "travelmemory"
+
+  tasks:
+    - name: Install prerequisites
+      ansible.builtin.apt:
+        name:
+          - gnupg
+          - curl
+          - python3-pymongo
+        state: present
+        update_cache: true
+
+    - name: Download MongoDB signing key
+      ansible.builtin.get_url:
+        url: https://pgp.mongodb.com/server-8.0.asc
+        dest: /tmp/mongodb-server-8.0.asc
+        mode: "0644"
+
+    - name: Convert MongoDB signing key
+      ansible.builtin.command:
+        cmd: >-
+          gpg --dearmor --yes
+          -o /usr/share/keyrings/mongodb-server-8.0.gpg
+          /tmp/mongodb-server-8.0.asc
+      changed_when: false
+
+    - name: Add MongoDB repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch=amd64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg]
+          https://repo.mongodb.org/apt/ubuntu
+          noble/mongodb-org/8.0 multiverse
+        filename: mongodb-org-8.0
+        state: present
+
+    - name: Install MongoDB
+      ansible.builtin.apt:
+        name: mongodb-org
+        state: present
+        update_cache: true
+
+    - name: Start MongoDB
+      ansible.builtin.service:
+        name: mongod
+        state: started
+        enabled: true
+
+    - name: Create MongoDB administrator
+      community.mongodb.mongodb_user:
+        database: admin
+        name: traveladmin
+        password: "{{ mongo_admin_password }}"
+        roles:
+          - root
+        state: present
+      vars:
+        ansible_python_interpreter: /opt/mongodb-ansible-venv/bin/python
+      no_log: true
+
+    - name: Create application database user
+      community.mongodb.mongodb_user:
+        database: travelmemory
+        name: travelapp
+        password: "{{ mongo_app_password }}"
+        roles:
+          - db: travelmemory
+            role: readWrite
+        login_user: traveladmin
+        login_password: "{{ mongo_admin_password }}"
+        login_database: admin
+        state: present
+      vars:
+        ansible_python_interpreter: /opt/mongodb-ansible-venv/bin/python
+      no_log: true
+
+    - name: Configure MongoDB network and authentication
+      ansible.builtin.copy:
+        dest: /etc/mongod.conf
+        mode: "0644"
+        content: |
+          storage:
+            dbPath: /var/lib/mongodb
+          systemLog:
+            destination: file
+            logAppend: true
+            path: /var/log/mongodb/mongod.log
+          net:
+            port: 27017
+            bindIp: 127.0.0.1,{{ ansible_default_ipv4.address }}
+          security:
+            authorization: enabled
+      notify: Restart MongoDB
+
+  handlers:
+    - name: Restart MongoDB
+      ansible.builtin.service:
+        name: mongod
+        state: restarted

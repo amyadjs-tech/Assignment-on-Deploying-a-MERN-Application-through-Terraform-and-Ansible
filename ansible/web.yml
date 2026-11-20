@@ -1,0 +1,130 @@
+---
+- name: Deploy TravelMemory application
+  hosts: web
+  become: true
+
+  vars_files:
+    - secrets.yml
+
+  vars:
+    app_dir: /opt/travelmemory
+    db_host: "{{ hostvars['dbserver']['ansible_host'] }}"
+    public_ip: "{{ ansible_host }}"
+    node_major: "22"
+
+  tasks:
+    - name: Install dependencies
+      ansible.builtin.apt:
+        name:
+          - curl
+          - git
+          - nginx
+          - ca-certificates
+        update_cache: true
+        state: present
+
+    - name: Download NodeSource setup script
+      ansible.builtin.get_url:
+        url: "https://deb.nodesource.com/setup_{{ node_major }}.x"
+        dest: /tmp/nodesource_setup.sh
+        mode: "0644"
+
+    - name: Configure NodeSource repository
+      ansible.builtin.command:
+        cmd: bash /tmp/nodesource_setup.sh
+      changed_when: false
+
+    - name: Install Node.js and NPM
+      ansible.builtin.apt:
+        name: nodejs
+        state: present
+        update_cache: true
+
+    - name: Clone TravelMemory repository
+      ansible.builtin.git:
+        repo: https://github.com/UnpredictablePrashant/TravelMemory.git
+        dest: "{{ app_dir }}"
+        version: main
+        force: false
+
+    - name: Install backend dependencies
+      community.general.npm:
+        path: "{{ app_dir }}/backend"
+        production: true
+
+    - name: Configure backend environment
+      ansible.builtin.template:
+        src: templates/backend.env.j2
+        dest: "{{ app_dir }}/backend/.env"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
+    - name: Install frontend dependencies
+      community.general.npm:
+        path: "{{ app_dir }}/frontend"
+
+    - name: Configure frontend environment
+      ansible.builtin.copy:
+        dest: "{{ app_dir }}/frontend/.env.production"
+        content: |
+          REACT_APP_BACKEND_URL=http://{{ public_ip }}/api
+        mode: "0644"
+
+    - name: Build React frontend
+      ansible.builtin.command:
+        cmd: npm run build
+        chdir: "{{ app_dir }}/frontend"
+      changed_when: true
+
+    - name: Configure backend systemd service
+      ansible.builtin.template:
+        src: templates/travelmemory.service.j2
+        dest: /etc/systemd/system/travelmemory.service
+        mode: "0644"
+      notify: Restart backend
+
+    - name: Configure Nginx
+      ansible.builtin.template:
+        src: templates/nginx.conf.j2
+        dest: /etc/nginx/sites-available/travelmemory
+        mode: "0644"
+      notify: Reload Nginx
+
+    - name: Enable Nginx site
+      ansible.builtin.file:
+        src: /etc/nginx/sites-available/travelmemory
+        dest: /etc/nginx/sites-enabled/travelmemory
+        state: link
+      notify: Reload Nginx
+
+    - name: Disable default Nginx site
+      ansible.builtin.file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: Reload Nginx
+
+    - name: Enable backend service
+      ansible.builtin.systemd:
+        name: travelmemory
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Test Nginx configuration
+      ansible.builtin.command:
+        cmd: nginx -t
+      changed_when: false
+
+  handlers:
+    - name: Restart backend
+      ansible.builtin.systemd:
+        name: travelmemory
+        state: restarted
+        daemon_reload: true
+
+    - name: Reload Nginx
+      ansible.builtin.service:
+        name: nginx
+        state: reloaded
